@@ -8,6 +8,8 @@ A Docker image that receives backup archives over HTTP and forwards them to any 
 2. backio saves it to a temp file and runs `rclone copyto` to upload it
 3. Returns `{"status":"ok","destination":"..."}` on success
 
+List or delete backups via `GET /backup` and `DELETE /backup`.
+
 ## Environment variables
 
 | Variable             | Required | Default | Description                  |
@@ -15,7 +17,32 @@ A Docker image that receives backup archives over HTTP and forwards them to any 
 | `RCLONE_CONF_BASE64` | Yes      | —       | base64-encoded `rclone.conf` |
 | `PORT`               | No       | `8080`  | HTTP listen port             |
 
-## Endpoint
+## Endpoints
+
+### `GET /backup`
+
+Query parameters:
+
+| Parameter      | Description                                      |
+| -------------- | ------------------------------------------------ |
+| `provider`     | rclone remote name (e.g. `gdrive`, `s3`)         |
+| `subdirectory` | Remote path to list (e.g. `myapp/production`)    |
+
+Returns the `rclone lsjson` output — a JSON array of file objects.
+
+**Responses:**
+
+- `200` — JSON array (rclone lsjson format)
+- `400` — missing or invalid parameters
+- `500` — rclone stderr verbatim
+
+Example:
+
+```sh
+curl "http://backio:8080/backup?provider=gdrive&subdirectory=myapp/production"
+```
+
+---
 
 ### `POST /backup`
 
@@ -35,6 +62,32 @@ Uploads to: `provider:subdirectory/name`
 - `200` — `{"status":"ok","destination":"gdrive:myapp/production/myapp-2024-01-15.tar"}`
 - `400` — missing or invalid fields (one error per line)
 - `500` — rclone stderr verbatim
+
+---
+
+### `DELETE /backup`
+
+Query parameters:
+
+| Parameter      | Description                                              |
+| -------------- | -------------------------------------------------------- |
+| `provider`     | rclone remote name (e.g. `gdrive`, `s3`)                 |
+| `subdirectory` | Remote path prefix (e.g. `myapp/production`)             |
+| `name`         | Filename to delete (e.g. `myapp-2024-01-15.tar`)         |
+
+Deletes `provider:subdirectory/name` via `rclone deletefile`.
+
+**Responses:**
+
+- `200` — `{"status":"ok","deleted":"gdrive:myapp/production/myapp-2024-01-15.tar"}`
+- `400` — missing or invalid parameters
+- `500` — rclone stderr verbatim
+
+Example:
+
+```sh
+curl -X DELETE "http://backio:8080/backup?provider=gdrive&subdirectory=myapp/production&name=myapp-20240115.tar"
+```
 
 ## Setup: Google Drive
 
