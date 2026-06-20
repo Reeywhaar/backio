@@ -149,6 +149,12 @@ Prints the token to stdout. Multiple grant strings can be passed as separate arg
 docker exec backio /backio list-tokens
 ```
 
+**Delete a token:**
+
+```sh
+docker exec backio /backio delete-token <token>
+```
+
 **Persistent storage:** mount a volume at `/data` so tokens survive container restarts:
 
 ```sh

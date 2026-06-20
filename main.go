@@ -204,9 +204,18 @@ func main() {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
+		case "delete-token":
+			token := ""
+			if len(os.Args) > 2 {
+				token = os.Args[2]
+			}
+			if err := internal.CmdDeleteToken(token); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
 		default:
 			fmt.Fprintf(os.Stderr, "unknown command %q\n", os.Args[1])
-			fmt.Fprintln(os.Stderr, "commands: issue-token, list-tokens")
+			fmt.Fprintln(os.Stderr, "commands: issue-token, list-tokens, delete-token")
 			os.Exit(1)
 		}
 		return

@@ -77,6 +77,31 @@ func TestParseGrant(t *testing.T) {
 	})
 }
 
+func TestDeleteFromStore(t *testing.T) {
+	t.Run("deletes existing token", func(t *testing.T) {
+		ts := tokenStore{
+			"token-a": {{Provider: "gdrive", Subdirectory: "app", Permissions: []string{"read"}}},
+			"token-b": {{Provider: "s3", Subdirectory: "app", Permissions: []string{"create"}}},
+		}
+		if err := deleteFromStore(ts, "token-a"); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := ts["token-a"]; ok {
+			t.Error("token-a should have been deleted")
+		}
+		if _, ok := ts["token-b"]; !ok {
+			t.Error("token-b should still exist")
+		}
+	})
+
+	t.Run("errors on unknown token", func(t *testing.T) {
+		ts := tokenStore{}
+		if err := deleteFromStore(ts, "no-such-token"); err == nil {
+			t.Error("expected error for unknown token")
+		}
+	})
+}
+
 func TestCheckGrants(t *testing.T) {
 	ts := tokenStore{
 		"token-a": {

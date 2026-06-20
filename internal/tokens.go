@@ -152,6 +152,32 @@ func CmdIssueToken(grantStrs []string) error {
 	return nil
 }
 
+func deleteFromStore(ts tokenStore, token string) error {
+	if _, ok := ts[token]; !ok {
+		return fmt.Errorf("token not found")
+	}
+	delete(ts, token)
+	return nil
+}
+
+func CmdDeleteToken(token string) error {
+	if token == "" {
+		return fmt.Errorf("usage: backio delete-token <token>")
+	}
+	ts, err := loadTokens()
+	if err != nil {
+		return fmt.Errorf("load tokens: %w", err)
+	}
+	if err := deleteFromStore(ts, token); err != nil {
+		return err
+	}
+	if err := saveTokens(ts); err != nil {
+		return fmt.Errorf("save tokens: %w", err)
+	}
+	fmt.Println("deleted")
+	return nil
+}
+
 func CmdListTokens() error {
 	ts, err := loadTokens()
 	if err != nil {

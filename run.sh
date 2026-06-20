@@ -11,6 +11,7 @@ if [ -z "$RCLONE_CONF_BASE64" ]; then
 fi
 
 docker network create backup-net 2>/dev/null || true
+docker rm -f backio 2>/dev/null || true
 
 docker run -d \
 	--network backup-net \
