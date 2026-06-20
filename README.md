@@ -30,16 +30,21 @@ Query parameters:
 
 Returns the `rclone lsjson` output — a JSON array of file objects.
 
+All requests require `Authorization: Bearer <token>` with `read` permission for the target provider and subdirectory.
+
 **Responses:**
 
 - `200` — JSON array (rclone lsjson format)
 - `400` — missing or invalid parameters
+- `401` — missing token
+- `403` — token lacks permission
 - `500` — rclone stderr verbatim
 
 Example:
 
 ```sh
-curl "http://backio:8080/backup?provider=gdrive&subdirectory=myapp/production"
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://backio:8080/backup?provider=gdrive&subdirectory=myapp/production"
 ```
 
 ---
@@ -55,12 +60,14 @@ Multipart form fields:
 | `subdirectory` | string | Remote path prefix (e.g. `myapp/production`)         |
 | `provider`     | string | rclone remote name (e.g. `gdrive`, `s3`)             |
 
-Uploads to: `provider:subdirectory/name`
+Uploads to: `provider:subdirectory/name`. Requires `Authorization: Bearer <token>` with `create` permission for the target provider and subdirectory.
 
 **Responses:**
 
 - `200` — `{"status":"ok","destination":"gdrive:myapp/production/myapp-2024-01-15.tar"}`
-- `400` — missing or invalid fields (one error per line)
+- `400` — missing or invalid fields
+- `401` — missing token
+- `403` — token lacks permission
 - `500` — rclone stderr verbatim
 
 ---
@@ -75,18 +82,55 @@ Query parameters:
 | `subdirectory` | Remote path prefix (e.g. `myapp/production`)             |
 | `name`         | Filename to delete (e.g. `myapp-2024-01-15.tar`)         |
 
-Deletes `provider:subdirectory/name` via `rclone deletefile`.
+Deletes `provider:subdirectory/name` via `rclone deletefile`. Requires `Authorization: Bearer <token>` with `delete` permission for the target provider and subdirectory.
 
 **Responses:**
 
 - `200` — `{"status":"ok","deleted":"gdrive:myapp/production/myapp-2024-01-15.tar"}`
 - `400` — missing or invalid parameters
+- `401` — missing token
+- `403` — token lacks permission
 - `500` — rclone stderr verbatim
 
 Example:
 
 ```sh
-curl -X DELETE "http://backio:8080/backup?provider=gdrive&subdirectory=myapp/production&name=myapp-20240115.tar"
+curl -X DELETE \
+  -H "Authorization: Bearer $BACKUP_TOKEN" \
+  "http://backio:8080/backup?provider=gdrive&subdirectory=myapp/production&name=myapp-20240115.tar"
+```
+
+## Access control
+
+Every request requires an `Authorization: Bearer <token>` header. Tokens are issued via the CLI and stored in `/data/tokens.json` inside the container.
+
+Each token carries one or more grants. A grant specifies a provider, a subdirectory, and a comma-separated list of permissions (`create`, `read`, `delete`). A request is allowed if any grant on the token matches the requested provider, subdirectory, and operation exactly.
+
+**Issue a token:**
+
+```sh
+docker exec backio /backio issue-token \
+  "gdrive myapp/production create,read" \
+  "gdrive myapp/production delete"
+```
+
+Prints the token to stdout. Multiple grant strings can be passed as separate arguments.
+
+**List tokens:**
+
+```sh
+docker exec backio /backio list-tokens
+```
+
+**Persistent storage:** mount a volume at `/data` so tokens survive container restarts:
+
+```sh
+docker run -d \
+  --network backup-net \
+  --name backio \
+  -v backio-data:/data \
+  -e RCLONE_CONF_BASE64="$RCLONE_CONF_BASE64" \
+  ghcr.io/reeywhaar/backio:latest
 ```
 
 ## Setup: Google Drive
@@ -133,6 +177,7 @@ docker network create backup-net
 docker run -d \
   --network backup-net \
   --name backio \
+  -v backio-data:/data \
   -e RCLONE_CONF_BASE64="$RCLONE_CONF_BASE64" \
   backio:latest
 
@@ -154,6 +199,7 @@ services:
       BACKUP_URL: http://backio:8080/backup
       BACKUP_PROVIDER: gdrive
       BACKUP_SUBDIRECTORY: myapp/production
+      BACKUP_TOKEN: "<token issued via docker exec backio /backio issue-token>"
     networks:
       - backup-net
 
@@ -173,7 +219,7 @@ COPY send-backup.sh /usr/local/bin/send-backup
 Usage:
 
 ```sh
-# Env vars: BACKUP_URL, BACKUP_NAME, BACKUP_SUBDIRECTORY, BACKUP_PROVIDER
+# Env vars: BACKUP_URL, BACKUP_NAME, BACKUP_SUBDIRECTORY, BACKUP_PROVIDER, BACKUP_TOKEN
 tar cf /tmp/backup.tar /data
 send-backup /tmp/backup.tar
 rm /tmp/backup.tar
@@ -183,6 +229,7 @@ Or call directly:
 
 ```sh
 curl -X POST http://backio:8080/backup \
+  -H "Authorization: Bearer $BACKUP_TOKEN" \
   -F "backup=@/tmp/backup.tar" \
   -F "name=myapp-$(date +%Y%m%d_%H%M%S).tar" \
   -F "subdirectory=myapp/production" \

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"backio/internal"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,11 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 )
-
-var safePathRE = regexp.MustCompile(`^[A-Za-z0-9._\-][A-Za-z0-9._\-/]*$`)
 
 func jsonError(w http.ResponseWriter, message string, code int) {
 	w.Header().Set("Content-Type", "application/json")
@@ -22,17 +20,38 @@ func jsonError(w http.ResponseWriter, message string, code int) {
 	w.Write(b)
 }
 
-func validateField(value, field string) string {
-	if value == "" {
-		return field + " is required"
-	}
-	if strings.Contains(value, "..") {
-		return field + " must not contain '..'"
-	}
-	if !safePathRE.MatchString(value) {
-		return field + " contains invalid characters"
+func bearerToken(r *http.Request) string {
+	auth := r.Header.Get("Authorization")
+	if after, ok := strings.CutPrefix(auth, "Bearer "); ok {
+		return strings.TrimSpace(after)
 	}
 	return ""
+}
+
+func authorize(w http.ResponseWriter, r *http.Request, provider, subdirectory, permission string) bool {
+	token := bearerToken(r)
+	if token == "" {
+		jsonError(w, "authorization required", http.StatusUnauthorized)
+		return false
+	}
+	ok, err := internal.CheckToken(token, provider, subdirectory, permission)
+	if err != nil {
+		jsonError(w, "failed to verify token: "+err.Error(), http.StatusInternalServerError)
+		return false
+	}
+	if !ok {
+		jsonError(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+func rcloneError(w http.ResponseWriter, out []byte, err error) {
+	msg := strings.TrimSpace(string(out))
+	if msg == "" {
+		msg = err.Error()
+	}
+	jsonError(w, "rclone failed: "+msg, http.StatusInternalServerError)
 }
 
 func listBackupsHandler(w http.ResponseWriter, r *http.Request) {
@@ -41,7 +60,7 @@ func listBackupsHandler(w http.ResponseWriter, r *http.Request) {
 
 	var errs []string
 	for _, check := range [][2]string{{"subdirectory", subdirectory}, {"provider", provider}} {
-		if msg := validateField(check[1], check[0]); msg != "" {
+		if msg := internal.ValidateField(check[1], check[0]); msg != "" {
 			errs = append(errs, msg)
 		}
 	}
@@ -50,14 +69,14 @@ func listBackupsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !authorize(w, r, provider, subdirectory, "read") {
+		return
+	}
+
 	target := provider + ":" + subdirectory
 	out, err := exec.Command("rclone", "lsjson", target).CombinedOutput()
 	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
-			msg = err.Error()
-		}
-		jsonError(w, "rclone failed: "+msg, http.StatusInternalServerError)
+		rcloneError(w, out, err)
 		return
 	}
 
@@ -72,7 +91,7 @@ func deleteBackupHandler(w http.ResponseWriter, r *http.Request) {
 
 	var errs []string
 	for _, check := range [][2]string{{"name", name}, {"subdirectory", subdirectory}, {"provider", provider}} {
-		if msg := validateField(check[1], check[0]); msg != "" {
+		if msg := internal.ValidateField(check[1], check[0]); msg != "" {
 			errs = append(errs, msg)
 		}
 	}
@@ -81,14 +100,14 @@ func deleteBackupHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !authorize(w, r, provider, subdirectory, "delete") {
+		return
+	}
+
 	target := provider + ":" + filepath.Join(subdirectory, name)
 	out, err := exec.Command("rclone", "deletefile", target).CombinedOutput()
 	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
-			msg = err.Error()
-		}
-		jsonError(w, "rclone failed: "+msg, http.StatusInternalServerError)
+		rcloneError(w, out, err)
 		return
 	}
 
@@ -129,12 +148,16 @@ func backupHandler(w http.ResponseWriter, r *http.Request) {
 
 	var errs []string
 	for _, check := range [][2]string{{"name", name}, {"subdirectory", subdirectory}, {"provider", provider}} {
-		if msg := validateField(check[1], check[0]); msg != "" {
+		if msg := internal.ValidateField(check[1], check[0]); msg != "" {
 			errs = append(errs, msg)
 		}
 	}
 	if len(errs) > 0 {
 		jsonError(w, strings.Join(errs, "\n"), http.StatusBadRequest)
+		return
+	}
+
+	if !authorize(w, r, provider, subdirectory, "create") {
 		return
 	}
 
@@ -155,11 +178,7 @@ func backupHandler(w http.ResponseWriter, r *http.Request) {
 	destination := provider + ":" + filepath.Join(subdirectory, name)
 	out, err := exec.Command("rclone", "copyto", tmp.Name(), destination).CombinedOutput()
 	if err != nil {
-		msg := strings.TrimSpace(string(out))
-		if msg == "" {
-			msg = err.Error()
-		}
-		jsonError(w, "rclone failed: "+msg, http.StatusInternalServerError)
+		rcloneError(w, out, err)
 		return
 	}
 
@@ -168,6 +187,26 @@ func backupHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "issue-token":
+			if err := internal.CmdIssueToken(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		case "list-tokens":
+			if err := internal.CmdListTokens(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		default:
+			fmt.Fprintf(os.Stderr, "unknown command %q\n", os.Args[1])
+			fmt.Fprintln(os.Stderr, "commands: issue-token, list-tokens")
+			os.Exit(1)
+		}
+		return
+	}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"

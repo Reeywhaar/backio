@@ -16,6 +16,7 @@ docker run -d \
 	--network backup-net \
 	--name backio \
 	--restart unless-stopped \
+	-v backio-data:/data \
 	-e RCLONE_CONF_BASE64="$RCLONE_CONF_BASE64" \
 	-e PORT="${PORT:-8080}" \
 	backio:latest
